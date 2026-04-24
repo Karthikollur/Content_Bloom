@@ -2,7 +2,81 @@
   "permissions": {
     "allow": [
       "Bash(npm run build)",
-      "Bash(curl -s http://localhost:3000/_next/static/css/app/layout.css)"
+      "Bash(curl -s http://localhost:3000/_next/static/css/app/layout.css)",
+      "Bash(npm run *)"
+    ],
+    "deny": [
+      "Bash(rm -rf *)",
+      "Bash(rm -rf /*)",
+      "Bash(rm -rf ~)",
+      "Bash(rm -rf ~/*)",
+      "Bash(rm -rf .)",
+      "Bash(rm -rf ./*)",
+      "Bash(sudo *)",
+      "Bash(chmod -R 777 *)",
+      "Bash(chmod 777 *)",
+      "Bash(chmod -R 0777 *)",
+      "Bash(* > /dev/*)",
+      "Bash(* >> /dev/*)",
+      "Bash(curl * | sh)",
+      "Bash(curl * | bash)",
+      "Bash(wget * | sh)",
+      "Bash(wget * | bash)",
+      "Bash(git push --force*)",
+      "Bash(git push -f*)",
+      "Bash(git reset --hard*)",
+      "Bash(git clean -fd*)",
+      "Bash(git checkout .*)",
+      "Bash(npm publish*)",
+      "Bash(npm config set *)",
+      "Bash(eval *)",
+      "Bash(dd if=*)",
+      "Bash(mkfs*)",
+      "Read(.env)",
+      "Read(.env.*)",
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Read(**/id_rsa)",
+      "Read(**/id_ed25519)",
+      "Read(**/.ssh/**)",
+      "Read(**/.aws/credentials)",
+      "Read(**/secrets/**)",
+      "Write(.env)",
+      "Write(.env.*)",
+      "Write(**/.env)",
+      "Write(**/.env.*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'cmd=$(jq -r \".tool_input.command // \\\"\\\"\" <<< \"$CLAUDE_TOOL_INPUT\"); for pat in \"rm -rf /\" \"rm -rf ~\" \"rm -rf .\" \"mkfs\" \"dd if=/dev/\" \":(){ :|:& };:\" \"curl | sh\" \"curl | bash\" \"wget | sh\" \"wget | bash\" \"git push --force\" \"git push -f \" \"git reset --hard\" \"npm publish\" \"sudo \"; do if [[ \"$cmd\" == *\"$pat\"* ]]; then echo \"BLOCKED: command matches dangerous pattern: $pat\" >&2; exit 2; fi; done; exit 0'"
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'path=$(jq -r \".tool_input.file_path // \\\"\\\"\" <<< \"$CLAUDE_TOOL_INPUT\"); case \"$path\" in *.env|*.env.*|*/id_rsa|*/id_ed25519|*/.ssh/*|*/secrets/*|*/.aws/credentials) echo \"BLOCKED: refusing to write sensitive path: $path\" >&2; exit 2 ;; esac; exit 0'"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/stop-check.sh"
+          }
+        ]
+      }
     ]
   }
 }

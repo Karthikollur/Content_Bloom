@@ -177,11 +177,62 @@ npm run lint
 
 ## Deployment
 
-Deploy to Vercel:
+### Pre-flight
 
-1. Connect your GitHub repository to Vercel
-2. Add all environment variables in Vercel project settings
-3. Deploy — every push to `main` auto-deploys
+```bash
+npm run build   # must exit clean before touching Vercel
+```
+
+Commit any pending changes to `main` — Vercel deploys whatever's on the default branch.
+
+### 1. Connect repo to Vercel
+
+Vercel → **Add New → Project** → import `Karthikollur/Content_Bloom`.
+Framework auto-detects as Next.js. Leave build/output at defaults. Do **not** deploy yet — set env vars first.
+
+### 2. Environment variables (Production + Preview + Development)
+
+**Required for Phase 1:**
+
+| Variable | Source |
+| --- | --- |
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase → Settings → API |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase → Settings → API (anon public key) |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase → Settings → API (service_role — **secret**) |
+| `NEXT_PUBLIC_APP_URL` | Your production URL, e.g. `https://contentbloom.vercel.app` |
+
+**Skip until later phases:** `ANTHROPIC_API_KEY`, `DEEPGRAM_API_KEY`, `GOOGLE_AI_API_KEY`, `STRIPE_SECRET_KEY`, `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`, `STRIPE_WEBHOOK_SECRET`.
+
+Hit **Deploy**. First build runs automatically.
+
+### 3. Wire auth redirect URLs (critical — skipping this breaks OAuth + password reset)
+
+**Supabase → Authentication → URL Configuration:**
+
+- **Site URL:** `https://contentbloom.vercel.app`
+- **Redirect URLs:** add both
+  - `https://contentbloom.vercel.app/**`
+  - `https://*.vercel.app/**` (so preview deployments work)
+
+Without this, password-reset emails link to `localhost` or get rejected.
+
+**Google Cloud Console → APIs & Services → Credentials → OAuth 2.0 Client IDs:**
+
+- **Authorized JavaScript origins:** `https://contentbloom.vercel.app`
+- **Authorized redirect URIs:** `https://contentbloom.vercel.app/auth/callback`
+
+> Google OAuth does **not** accept wildcards — preview deployments (`*.vercel.app`) will fail Google sign-in unless you add each preview origin + redirect URI manually. For stable preview auth, assign a fixed Vercel preview domain and register it here.
+
+### 4. Smoke test on the production URL (incognito window)
+
+- Sign up with a new email → confirm if confirmation enabled
+- Log out → log back in
+- Forgot password → check email → reset → log in with new password
+- Upload an mp3/mp4 → see it on the dashboard with a status badge
+- Refresh — file persists
+- Log out — `/dashboard` bounces back to `/login`
+
+Every push to `main` redeploys automatically after initial setup.
 
 ## License
 
