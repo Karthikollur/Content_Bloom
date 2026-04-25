@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { generateContent } from '@/lib/ai/claude'
+import { isInsufficientSource } from '@/lib/ai/source-check'
 import type { Platform } from '@/types/database'
 
 export const maxDuration = 60
@@ -75,6 +76,7 @@ export async function POST(request: Request) {
 
   const outputRows = results.flatMap((result, index) => {
     if (result.status !== 'fulfilled') return []
+    if (isInsufficientSource(result.value.content)) return []
     const platform = TARGET_PLATFORMS[index]
     return [
       {
@@ -102,10 +104,24 @@ export async function POST(request: Request) {
   }
   await supabase.from('usage_logs').insert(usageRows)
 
-  const allFailed = outputRows.length === 0
-  const failureMessage = allFailed
+  const insufficientCount = results.filter(
+    (r) => r.status === 'fulfilled' && isInsufficientSource(r.value.content)
+  ).length
+  const rejectedCount = results.filter((r) => r.status === 'rejected').length
+  const allUnusable = outputRows.length === 0
+
+  const failureMessage = allUnusable
     ? results
-        .map((r) => (r.status === 'rejected' ? (r.reason as Error)?.message ?? 'unknown' : null))
+        .map((r, i) => {
+          const platform = TARGET_PLATFORMS[i]
+          if (r.status === 'rejected') {
+            return `${platform}: ${(r.reason as Error)?.message ?? 'unknown'}`
+          }
+          if (isInsufficientSource(r.value.content)) {
+            return `${platform}: insufficient source`
+          }
+          return null
+        })
         .filter(Boolean)
         .join('; ') || 'All generations failed'
     : null
@@ -113,14 +129,15 @@ export async function POST(request: Request) {
   await supabase
     .from('assets')
     .update({
-      status: allFailed ? 'failed' : 'complete',
+      status: allUnusable ? 'failed' : 'complete',
       error_message: failureMessage,
     })
     .eq('id', assetId)
 
   return NextResponse.json({
-    success: !allFailed,
+    success: !allUnusable,
     generated: outputRows.length,
-    failed: TARGET_PLATFORMS.length - outputRows.length,
+    failed: rejectedCount,
+    insufficient: insufficientCount,
   })
 }

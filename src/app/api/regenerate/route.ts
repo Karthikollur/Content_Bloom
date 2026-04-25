@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { generateContent } from '@/lib/ai/claude'
+import { isInsufficientSource } from '@/lib/ai/source-check'
 import type { Platform } from '@/types/database'
 
 export const maxDuration = 60
@@ -79,6 +80,21 @@ export async function POST(request: Request) {
       brandVoice: brandVoice?.voice_description ?? undefined,
       exampleContent: brandVoice?.example_content ?? undefined,
     })
+
+    if (isInsufficientSource(content)) {
+      await supabase.from('usage_logs').insert({
+        user_id: user.id,
+        asset_id: assetId,
+        action: `regenerate_${platform}`,
+        api_provider: 'anthropic',
+        tokens_used: tokensUsed,
+        cost_usd: costUsd,
+      })
+      return NextResponse.json(
+        { error: 'Source content insufficient to regenerate', insufficient: true },
+        { status: 422 }
+      )
+    }
 
     const { data: inserted, error: insertError } = await supabase
       .from('outputs')
