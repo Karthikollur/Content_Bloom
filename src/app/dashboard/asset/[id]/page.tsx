@@ -1,13 +1,14 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { useParams, useRouter } from 'next/navigation'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useParams } from 'next/navigation'
 import { ArrowLeft, Loader2, FileText, Mic, Video, Link as LinkIcon } from 'lucide-react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { ProcessingStatus } from '@/components/features/ProcessingStatus'
+import { OutputTabs } from '@/components/features/OutputTabs'
 import { formatRelativeTime, formatFileSize } from '@/lib/utils/helpers'
-import type { Asset, Output } from '@/types/database'
+import type { Asset, AssetStatus, Output, Platform } from '@/types/database'
 
 const SOURCE_ICONS = {
   audio: Mic,
@@ -16,55 +17,114 @@ const SOURCE_ICONS = {
   url: LinkIcon,
 }
 
+const POLL_INTERVAL_MS = 3000
+const ACTIVE_STATUSES: ReadonlySet<AssetStatus> = new Set<AssetStatus>([
+  'uploading',
+  'uploaded',
+  'transcribing',
+  'generating',
+])
+
 export default function AssetDetailPage() {
   const params = useParams()
-  const router = useRouter()
+  const assetId = params.id as string
   const [asset, setAsset] = useState<Asset | null>(null)
   const [outputs, setOutputs] = useState<Output[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const fetchAsset = useCallback(async () => {
+    const supabase = createClient()
+    const { data, error: assetError } = await supabase
+      .from('assets')
+      .select('*')
+      .eq('id', assetId)
+      .single()
+
+    if (assetError || !data) {
+      setError(assetError?.message ?? 'Asset not found')
+      return null
+    }
+    const typed = data as unknown as Asset
+    setAsset(typed)
+    setError(null)
+    return typed
+  }, [assetId])
+
+  const fetchOutputs = useCallback(async () => {
+    const supabase = createClient()
+    const { data } = await supabase
+      .from('outputs')
+      .select('*')
+      .eq('asset_id', assetId)
+      .order('version', { ascending: false })
+    setOutputs((data ?? []) as unknown as Output[])
+  }, [assetId])
+
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current)
+      pollRef.current = null
+    }
+  }, [])
 
   useEffect(() => {
-    const loadAsset = async () => {
-      const supabase = createClient()
-      const assetId = params.id as string
+    let cancelled = false
 
-      const { data: assetData, error: assetError } = await supabase
-        .from('assets')
-        .select('*')
-        .eq('id', assetId)
-        .single()
-
-      if (assetError || !assetData) {
-        setError(assetError?.message ?? 'Asset not found')
-        setLoading(false)
-        return
+    const initial = async () => {
+      const current = await fetchAsset()
+      if (cancelled) return
+      if (current && !ACTIVE_STATUSES.has(current.status)) {
+        await fetchOutputs()
       }
-
-      const typedAsset = assetData as unknown as Asset
-      setAsset(typedAsset)
-
-      // Load outputs if asset is complete
-      if (typedAsset.status === 'complete') {
-        const { data: outputData } = await supabase
-          .from('outputs')
-          .select('*')
-          .eq('asset_id', assetId)
-          .order('platform')
-
-        setOutputs((outputData ?? []) as unknown as Output[])
-      }
-
       setLoading(false)
     }
 
-    loadAsset()
-  }, [params.id])
+    initial()
+    return () => {
+      cancelled = true
+      stopPolling()
+    }
+  }, [fetchAsset, fetchOutputs, stopPolling])
+
+  useEffect(() => {
+    if (!asset) return
+    if (!ACTIVE_STATUSES.has(asset.status)) {
+      stopPolling()
+      return
+    }
+    if (pollRef.current) return
+
+    pollRef.current = setInterval(async () => {
+      const next = await fetchAsset()
+      if (next && !ACTIVE_STATUSES.has(next.status)) {
+        await fetchOutputs()
+        stopPolling()
+      }
+    }, POLL_INTERVAL_MS)
+  }, [asset, fetchAsset, fetchOutputs, stopPolling])
+
+  const handleRegenerate = useCallback(
+    async (platform: Platform) => {
+      const response = await fetch('/api/regenerate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ assetId, platform }),
+      })
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as { error?: string } | null
+        throw new Error(body?.error ?? 'Regenerate failed')
+      }
+      await fetchOutputs()
+    },
+    [assetId, fetchOutputs]
+  )
 
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <Loader2 className="text-accent animate-spin" size={24} />
+        <Loader2 className="text-accent animate-spin" size={24} aria-hidden="true" />
       </div>
     )
   }
@@ -72,7 +132,9 @@ export default function AssetDetailPage() {
   if (error || !asset) {
     return (
       <div className="text-center py-20">
-        <p className="text-danger mb-4">{error ?? 'Asset not found'}</p>
+        <p role="alert" className="text-danger mb-4">
+          {error ?? 'Asset not found'}
+        </p>
         <Link href="/dashboard" className="text-accent hover:text-accent-hover transition-colors">
           Back to Dashboard
         </Link>
@@ -81,10 +143,11 @@ export default function AssetDetailPage() {
   }
 
   const Icon = SOURCE_ICONS[asset.source_type]
+  const isActive = ACTIVE_STATUSES.has(asset.status)
+  const hasOutputs = outputs.length > 0
 
   return (
     <div>
-      {/* Back link */}
       <Link
         href="/dashboard"
         className="inline-flex items-center gap-1.5 text-text-secondary hover:text-text-primary transition-colors text-sm mb-6"
@@ -93,18 +156,17 @@ export default function AssetDetailPage() {
         Back to Dashboard
       </Link>
 
-      {/* Asset header */}
       <div className="bg-surface border border-border rounded-lg p-6 mb-6">
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-4">
             <div className="w-12 h-12 rounded-lg bg-accent-soft flex items-center justify-center">
-              <Icon className="text-accent" size={24} />
+              <Icon className="text-accent" size={24} aria-hidden="true" />
             </div>
             <div>
               <h1 className="text-text-primary text-xl font-semibold">{asset.title}</h1>
               <p className="text-text-tertiary text-sm mt-1">
                 {asset.source_type} &middot; {formatRelativeTime(asset.created_at)}
-                {asset.file_size_bytes ? ` \u00B7 ${formatFileSize(asset.file_size_bytes)}` : ''}
+                {asset.file_size_bytes ? ` · ${formatFileSize(asset.file_size_bytes)}` : ''}
               </p>
             </div>
           </div>
@@ -112,13 +174,12 @@ export default function AssetDetailPage() {
         </div>
 
         {asset.error_message && (
-          <div className="bg-danger/10 text-danger text-sm px-3 py-2 rounded-lg mt-4">
+          <div role="alert" className="bg-danger/10 text-danger text-sm px-3 py-2 rounded-lg mt-4">
             {asset.error_message}
           </div>
         )}
       </div>
 
-      {/* Transcript section */}
       {asset.transcript && (
         <div className="bg-surface border border-border rounded-lg p-6 mb-6">
           <h2 className="text-text-primary font-medium mb-3">Transcript</h2>
@@ -128,36 +189,22 @@ export default function AssetDetailPage() {
         </div>
       )}
 
-      {/* Outputs section */}
-      {outputs.length > 0 && (
-        <div className="space-y-4">
-          <h2 className="text-text-primary font-medium">Generated Outputs</h2>
-          {outputs.map((output) => (
-            <div key={output.id} className="bg-surface border border-border rounded-lg p-6">
-              <h3 className="text-text-primary font-medium capitalize mb-3">{output.platform}</h3>
-              <div className="text-text-secondary text-sm whitespace-pre-wrap">
-                {output.content}
-              </div>
-            </div>
-          ))}
-        </div>
+      {hasOutputs && (
+        <OutputTabs outputs={outputs} onRegenerate={handleRegenerate} onUpdated={fetchOutputs} />
       )}
 
-      {/* Empty state for outputs */}
-      {asset.status === 'uploaded' && (
+      {!hasOutputs && asset.status === 'uploaded' && asset.source_type !== 'audio' && asset.source_type !== 'video' && (
         <div className="bg-surface border border-border rounded-lg p-8 text-center">
-          <p className="text-text-secondary text-sm mb-1">
-            This asset is ready to be processed.
-          </p>
+          <p className="text-text-secondary text-sm mb-1">This asset is ready to be processed.</p>
           <p className="text-text-tertiary text-xs">
-            AI content generation will be available in Phase 2.
+            Generation for text and URL sources is coming in Phase 3.
           </p>
         </div>
       )}
 
-      {['transcribing', 'generating'].includes(asset.status) && (
-        <div className="bg-surface border border-border rounded-lg p-8 text-center">
-          <Loader2 className="text-accent animate-spin mx-auto mb-3" size={24} />
+      {!hasOutputs && isActive && (
+        <div role="status" className="bg-surface border border-border rounded-lg p-8 text-center">
+          <Loader2 className="text-accent animate-spin mx-auto mb-3" size={24} aria-hidden="true" />
           <p className="text-text-secondary text-sm">Processing your content...</p>
         </div>
       )}
