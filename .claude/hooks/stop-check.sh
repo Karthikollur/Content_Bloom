@@ -9,7 +9,7 @@ fi
 staged=$(git diff --cached --name-only)
 for f in $staged; do
   case "$f" in
-    *.env|*.env.*|*id_rsa*|*id_ed25519*|*secrets*)
+    *.env|*.env.*|*id_rsa*|*id_ed25519*|*secrets*|*.pem|*.key|*credentials.json|*gcp-*.json)
       echo "WARNING: sensitive file staged: $f" >&2
       ;;
   esac
