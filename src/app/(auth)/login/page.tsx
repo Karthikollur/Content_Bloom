@@ -163,9 +163,36 @@ function LoginForm() {
   )
 }
 
+function LoginFormSkeleton() {
+  return (
+    <AuthShell>
+      <div aria-hidden="true" className="animate-pulse">
+        <div className="h-6 w-32 mx-auto bg-surface-hover rounded mb-6" />
+        <div className="h-10 w-full bg-surface-hover rounded-lg mb-4" />
+        <div className="relative my-4">
+          <div className="absolute inset-0 flex items-center">
+            <div className="w-full border-t border-border" />
+          </div>
+        </div>
+        <div className="space-y-4">
+          <div>
+            <div className="h-3 w-12 bg-surface-hover rounded mb-1.5" />
+            <div className="h-10 w-full bg-surface-hover rounded-lg" />
+          </div>
+          <div>
+            <div className="h-3 w-16 bg-surface-hover rounded mb-1.5" />
+            <div className="h-10 w-full bg-surface-hover rounded-lg" />
+          </div>
+          <div className="h-10 w-full bg-surface-hover rounded-lg" />
+        </div>
+      </div>
+    </AuthShell>
+  )
+}
+
 export default function LoginPage() {
   return (
-    <Suspense fallback={null}>
+    <Suspense fallback={<LoginFormSkeleton />}>
       <LoginForm />
     </Suspense>
   )
