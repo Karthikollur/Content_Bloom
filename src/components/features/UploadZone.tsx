@@ -116,19 +116,14 @@ export function UploadZone() {
 
         setUploadProgress(60)
 
-        // Get public URL
-        const {
-          data: { publicUrl },
-        } = supabase.storage.from('assets').getPublicUrl(filePath)
-
-        // Create asset record
+        // Store storage path (private bucket); transcribe route signs on read.
         const { data: asset, error: insertError } = await supabase
           .from('assets')
           .insert({
             user_id: user.id,
             title: title.trim(),
             source_type: getSourceTypeFromFile(file),
-            source_url: publicUrl,
+            source_url: filePath,
             file_size_bytes: file.size,
             status: 'uploaded',
           })
@@ -139,7 +134,18 @@ export function UploadZone() {
 
         setUploadProgress(100)
         const fileAsset = asset as Record<string, unknown>
-        router.push(`/dashboard/asset/${fileAsset.id}`)
+        const assetId = String(fileAsset.id)
+
+        // Kick off transcription pipeline; runs in the background.
+        void fetch('/api/transcribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ assetId }),
+        }).catch(() => {
+          // Pipeline failures surface via asset.status on the detail page.
+        })
+
+        router.push(`/dashboard/asset/${assetId}`)
       } else if (inputMode === 'text' && textContent.trim()) {
         // Text input — create asset directly
         const { data: asset, error: insertError } = await supabase
